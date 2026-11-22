@@ -1,0 +1,41 @@
+name: Verify message dialog accessibility
+on:
+  push:
+    branches: [validation/scroll-message-dialog]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: e4629dd8bc702c5c2221c73dfec81ffef92d3386
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: flutter-actions/setup-flutter@v4
+        with:
+          version: '3.41.9'
+          channel: stable
+      - run: flutter pub get
+      - run: flutter pub get
+        working-directory: packages/localsend_isolates/rust_builder/cargokit/build_tool
+      - name: Reproduce the failure with the original dialog
+        run: |
+          git restore --source=19c02034291ae9ef24dc1a6611aa126115a86ad1 lib/widget/dialogs/message_input_dialog.dart
+          if flutter test --no-pub --reporter expanded test/widget/message_input_dialog_test.dart > "$RUNNER_TEMP/baseline.log" 2>&1; then
+            cat "$RUNNER_TEMP/baseline.log"
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/baseline.log"
+          grep -E 'overflowed by|would not hit test|Expected:.*(matching|exactly one|one matching)|Expected: null' "$RUNNER_TEMP/baseline.log"
+          git restore lib/widget/dialogs/message_input_dialog.dart
+      - name: Check formatting and analyze the app
+        run: |
+          dart format --output=none --set-exit-if-changed lib/widget/dialogs/message_input_dialog.dart test/widget/message_input_dialog_test.dart
+          flutter analyze --no-pub
+      - name: Run app tests with the fixed dialog
+        run: flutter test --no-pub --reporter expanded
