@@ -23,19 +23,42 @@ jobs:
       - run: flutter pub get
       - run: flutter pub get
         working-directory: packages/localsend_isolates/rust_builder/cargokit/build_tool
-      - name: Reproduce the failure with the original dialog
+      - name: Capture the same dialog before and after the fix
         run: |
-          git restore --source=19c02034291ae9ef24dc1a6611aa126115a86ad1 lib/widget/dialogs/message_input_dialog.dart
-          if flutter test --no-pub --reporter expanded test/widget/message_input_dialog_test.dart > "$RUNNER_TEMP/baseline.log" 2>&1; then
-            cat "$RUNNER_TEMP/baseline.log"
-            exit 1
-          fi
-          cat "$RUNNER_TEMP/baseline.log"
-          grep -E 'overflowed by|would not hit test|Expected:.*(matching|exactly one|one matching)|Expected: null' "$RUNNER_TEMP/baseline.log"
-          git restore lib/widget/dialogs/message_input_dialog.dart
-      - name: Check formatting and analyze the app
-        run: |
-          dart format --output=none --set-exit-if-changed lib/widget/dialogs/message_input_dialog.dart test/widget/message_input_dialog_test.dart
-          flutter analyze --no-pub
-      - name: Run app tests with the fixed dialog
-        run: flutter test --no-pub --reporter expanded
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('test/widget/message_input_dialog_test.dart')
+          code = path.read_text()
+          code = "import 'dart:io';\nimport 'package:flutter/services.dart';\n"+code
+          anchor = '    await tester.pumpWidget('
+          code = code.replace(anchor, """    await tester.runAsync(() async {
+                final bytes = await File('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf').readAsBytes();
+                final loader = FontLoader('EvidenceFont')..addFont(Future.value(ByteData.sublistView(bytes)));
+                await loader.load();
+              });
+          """ + anchor)
+          code = code.replace('      MaterialApp(', "      MaterialApp(theme: ThemeData(fontFamily: 'EvidenceFont'),")
+          code = code.replace('builder: (context, child) => MediaQuery(', "builder: (context, child) => RepaintBoundary(key: const ValueKey('frame'), child: MediaQuery(")
+          code = code.replace('child: child!,', 'child: child!),')
+          code = code[:code.index('    expect(tester.takeException()')] + """    tester.takeException();
+              await expectLater(find.byKey(const ValueKey('frame')), matchesGoldenFile('dialog.png'));
+            });
+          }
+          """
+          path.write_text(code)
+          PY
+          mkdir -p "$RUNNER_TEMP/evidence"
+          for version in before after; do
+            if [ "$version" = before ]; then
+              git restore --source=19c02034291ae9ef24dc1a6611aa126115a86ad1 lib/widget/dialogs/message_input_dialog.dart
+            else
+              git restore lib/widget/dialogs/message_input_dialog.dart
+            fi
+            flutter test --no-pub --update-goldens test/widget/message_input_dialog_test.dart
+            mv test/widget/dialog.png "$RUNNER_TEMP/evidence/$version.png"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: message-dialog-before-after
+          path: ${{ runner.temp }}/evidence/*.png
+          retention-days: 90
